@@ -1,0 +1,245 @@
+---
+title: "Assignment 3"
+author: "Matthew McAvoy"
+date: "March 6, 2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load data and look for anomalies
+
+```{r, include=FALSE}
+library(tidyverse)
+library(stringr)
+
+setwd("C:/Users/homur/OneDrive/New College/Visualization/Week4")
+```
+
+```{r, include=FALSE}
+data <- read_csv("fl_uni_employee_salary.csv")
+
+names(data) <- c("University", "Budget.Entity", "Pos.Num", "Last.N", "First.N", "MI", "Employee.Type", "FTE", "Class.Code", "Class.Title", "Annual.Salary", "OPS.Term")
+```
+
+Lets first take a look at the data
+```{r}
+summary(data)
+```
+
+There are a number of NA's, especially in OPS Term Amount and Annual Salary. This makes sense as a person can only be one or the other.
+
+Next is to check if there are duplicate people in the data set.
+
+```{r}
+repeats <- duplicated(data)
+uniqData <- data[!repeats,]
+
+sum(repeats); dim(data); dim(uniqData)
+```
+
+We see there are 7250 duplicated entries, or about 8% of the data.
+
+## Salary data NCF vs SUS
+
+Lets find New College's code
+
+```{r}
+unique(uniqData$University)
+```
+
+We will want to group by NCF and put everyone else in SUS. We can make a new column with only those categories then group and summarize on salary.
+
+```{r}
+ud <- uniqData %>% mutate(NCFSUS = ifelse(University=="NCF", "NCF", "SUS"))
+
+ud2 <- ud %>% filter(!is.na(Annual.Salary)) %>% group_by(NCFSUS) %>%
+  summarise(avgSalary=mean(Annual.Salary))
+```
+
+Bar chart looking at Average salary for all employees at NCF and SUS at large.
+
+```{r}
+ggplot(data=ud2, aes(x=NCFSUS, y=avgSalary)) + geom_bar(aes(fill=NCFSUS), stat="identity") + 
+  theme_minimal()  + labs(title="Aggregate Salaries between NCF and SUS Employees", x="Group", y="Annual Salary") + 
+  scale_fill_discrete(name="Groups", labels=c("NCF", "SUS"))
+```
+
+Looks like NCF is paying their employees less.
+
+## NCF vs SUS by Class Title
+
+Lets separate by class title now. There are quite alot of titles. Lets group them based on the top nine. The tenth is NA and after that not as important.
+
+```{r}
+topTitles <- ud %>% group_by(Class.Title) %>% 
+  summarise(mostTitle = n()) %>% select(Class.Title, mostTitle) %>%
+  arrange(desc(mostTitle)) %>% head(9)
+```
+
+We will only want to look at annual salaried employees that are one of the class types we want to investigate.
+
+```{r}
+ud3 <- ud %>% filter(!is.na(Annual.Salary)) %>% filter(Class.Title %in% topTitles$Class.Title) 
+
+unique(ud3$Class.Title)
+```
+
+This reduces the class titles to six. A resident is not something I'm particularly familiar with, so I wll drop anyone that is a resident. Lecturer and Instructor to me seem to be the same, so I will label them both as Lecturer.
+
+```{r}
+ud3 <- ud3 %>% filter(Class.Title != "RESIDENT")
+
+ud3$Class.Title <- sub("INSTRUCTOR", "LECTURER", ud3$Class.Title)
+
+ud3 %>% distinct(Class.Title)
+```
+
+We are now ready to look at some graphics.
+
+## Annual Salary among all Florida Professors
+
+```{r}
+ggplot(data=ud3, aes(x=Class.Title, y=Annual.Salary)) +
+  geom_boxplot(aes(color=Class.Title)) + theme_minimal() + theme(axis.text.x = element_blank()) + 
+  labs(title="Salary Among Florida Professors", x="Class Title", y="Annual Salary") + 
+  scale_color_discrete(name="Class Title", labels=c("LECTURER", "ASSISTANT PROFESSOR", "ASSOCIATE PROFESSOR", "PROFESSOR"))
+```
+
+It Looks like Professors make the most out of teaching faculty.
+
+## Comparison of Salary among NCF Professors and SUS Professors.
+
+Changed facet grid names to fit on page and factor class titles to put in order I want.
+
+```{r}
+Title_names <- c(
+                    `ASSISTANT PROFESSOR` = "PROF1",
+                    `ASSOCIATE PROFESSOR` = "PROF2",
+                    `PROFESSOR` = "PROF3",
+                    `LECTURER` = "LECT"
+                    )
+
+ud3$Class.Title <- factor(ud3$Class.Title, levels = c("LECTURER", "ASSISTANT PROFESSOR", "ASSOCIATE PROFESSOR", "PROFESSOR"))
+```
+
+
+```{r}
+ggplot(data=ud3, aes(x=NCFSUS, y=Annual.Salary)) + geom_boxplot(aes(color=NCFSUS)) + 
+  facet_grid(~Class.Title, labeller = as_labeller(Title_names)) + theme_minimal() + 
+  theme(axis.text.x = element_blank()) + 
+  labs(title="Salaries of NCF and SUS Professors", x="Professor level", y="Annual Salary") + 
+  scale_color_discrete(name="Groups", labels=c("NCF", "SUS"))
+```
+
+With such a large tail, lets filter on a top salary of 300,000, as well as exclude anyone making less than 10,000. These might be coding errors.
+
+```{r}
+ud4 <- ud3 %>% filter(Annual.Salary < 300000 & Annual.Salary > 10000)
+```
+
+```{r}
+ggplot(data=ud4, aes(x=NCFSUS, y=Annual.Salary)) + geom_boxplot(aes(color=NCFSUS)) + 
+  facet_grid(~Class.Title, labeller = as_labeller(Title_names)) + theme_minimal() + 
+  theme(axis.text.x = element_blank()) + 
+  labs(title="Salaries of NCF and SUS Professors", x="Professor level", y="Annual Salary") + 
+  scale_color_discrete(name="Groups", labels=c("NCF", "SUS"))
+```
+
+It looks like NCF pays their professors less than most schools in the rest of Florida.
+
+## Pay difference between administration and professors
+
+We want to next look at the difference in pay between administrative and faculty salaries. Looking at possible titles, I will chose the following for labelling as faculty or administration
+
+Faculty
+ * Professor
+ * Assistant Professor
+ * Associate Professor
+
+Administration
+ * Faculty Administrator
+ * Office Manager
+ * Assistant Director
+ * Director
+
+I will begin by aggregating to take a big picture look at how the two vary, compare them separately, then compare Professors and Directors at NCF.
+
+## Faculty vs Administration pay
+
+```{r}
+FacMin <- c("PROFESSOR", "ASSISTANT PROFESSOR", "ASSOCIATE PROFESSOR", "FACULTY ADMINISTRATOR", "OFFICE MANAGER", "ASSISTANT DIRECTOR", "DIRECTOR")
+
+FAD <- ud %>% filter(!is.na(Annual.Salary)) %>% filter(Class.Title %in% FacMin) %>% 
+  filter(Annual.Salary < 300000 & Annual.Salary > 10000)
+```
+
+Adding Group titles
+
+```{r}
+FacTitles <- c("PROFESSOR", "ASSISTANT PROFESSOR", "ASSOCIATE PROFESSOR")
+
+FAD <- FAD %>% mutate(Group = ifelse(Class.Title %in% FacTitles, "FACULTY", "ADMINISTRATION"))
+```
+
+```{r}
+ggplot(data=FAD, aes(x=Group, y=Annual.Salary)) + 
+  geom_boxplot(aes(color=Group)) + theme_minimal() + theme(axis.text.x = element_blank()) + 
+  labs(title="Salaries of Faculty vs Administration", x="Groups", y="Annual Salary") + 
+  scale_color_discrete(name="Groups", labels=c("Administration", "Faculty"))
+```
+
+It looks like faculty may be payed more than administration.
+
+Lets look at how it splits for NCF.
+
+```{r}
+FAD_NCF <- FAD %>% filter(University == "NCF")
+```
+
+```{r}
+ggplot(data=FAD_NCF, aes(x=Group, y=Annual.Salary)) + 
+  geom_boxplot(aes(color=Group)) + theme_minimal() + theme(axis.text.x = element_blank()) + 
+  labs(title="Salaries of Faculty vs Administration at NCF", x="Groups", y="Annual Salary") + 
+  scale_color_discrete(name="Groups", labels=c("Administration", "Faculty"))
+```
+
+The difference is more pronounced with faculty having higher salaries than administration.
+
+## Classes Salary Pay
+
+Next is to look at how pay varies by different class titles.
+
+```{r}
+FAD$Class.Title <- factor(FAD$Class.Title, levels = c("OFFICE MANAGER", "FACULTY ADMINISTRATOR", "ASSISTANT DIRECTOR", "DIRECTOR", "ASSISTANT PROFESSOR", "ASSOCIATE PROFESSOR", "PROFESSOR"))
+
+ggplot(data=FAD, aes(x=Class.Title, y=Annual.Salary)) + 
+  geom_boxplot(aes(color=Class.Title)) + theme_minimal() + theme(axis.text.x = element_blank()) + 
+  labs(title="Salaries of Faculty and Administration", x="Class Levels", y="Annual Salary") + 
+  scale_color_discrete(name="Class Levels")
+```
+
+Faculty administrators seem to be payed pretty well. Now we can look at NCF specifically.
+
+## Classes Salary Pay at NCF
+
+```{r}
+FAD_NCF$Class.Title <- factor(FAD_NCF$Class.Title, levels = c("OFFICE MANAGER", "FACULTY ADMINISTRATOR", "ASSISTANT DIRECTOR", "DIRECTOR", "ASSISTANT PROFESSOR", "ASSOCIATE PROFESSOR", "PROFESSOR"))
+
+ggplot(data=FAD_NCF, aes(x=Class.Title, y=Annual.Salary)) + 
+  geom_boxplot(aes(color=Class.Title)) + theme_minimal() + theme(axis.text.x = element_blank()) + 
+  labs(title="Salaries of Faculty and Administration at NCF", x="Class Levels", y="Annual Salary") + 
+  scale_color_discrete(name="Class Levels")
+```
+
+Overall, it looks like Professors all over Florida make more than most administrators. 
+
+Caution should be noted in looking at SUS data; some of the values seem abmornally high. I can't rule them out as being too high, but is sceptical.
+
+
+
+
+
+
